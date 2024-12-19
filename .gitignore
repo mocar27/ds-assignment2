@@ -1,0 +1,10 @@
+.DS_store
+.vscode
+debug/
+target/
+public-tests/target/
+public-tests/debug/
+solution/target/
+solution/debug/
+test-utils/target/
+test-utils/debug/

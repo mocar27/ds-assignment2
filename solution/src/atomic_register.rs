@@ -1,0 +1,1 @@
+// copy paste kodu z tresci zadania / przedstawionego na wykladzie
