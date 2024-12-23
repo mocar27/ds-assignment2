@@ -95,7 +95,7 @@ pub mod sectors_manager_public {
 // They convert bytes to a RegisterCommand object and in the other direction, respectively. 
 // They shall implement the message formats as described above (see the description of TCP communication).
 pub mod transfer_public {
-    use crate::RegisterCommand;
+    use crate::{transfer_operations::chuj, RegisterCommand};
     use std::io::Error;
     use tokio::io::{AsyncRead, AsyncWrite};
 

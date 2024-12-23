@@ -1,4 +1,5 @@
-// Stable storage inspired by the task assignment on lab06.
+// Inherited from the lab06 solution.
+
 use std::path::PathBuf;
 
 use tokio::fs::{read, rename, remove_file, File};
@@ -53,15 +54,43 @@ impl StableStorageData {
 #[async_trait::async_trait]
 impl StableStorage for StableStorageData { 
     async fn put(&mut self, key: &str, value: &[u8]) -> Result<(), String> {
-        unimplemented!()
+
+        StableStorageData::validate_key(key)?;
+        StableStorageData::validate_value(value)?;
+
+        let key_path = self.key_path(key);
+        let temp_path = key_path.with_extension("tmp");
+
+        // Write value to a temp file first, as designed in the description
+        let mut temp_file = File::create(temp_path.as_path()).await.unwrap();
+        temp_file.write_all(value).await.unwrap();
+        temp_file.sync_data().await.unwrap();
+
+        // Rename the temporary file to the actual file (atomic operation)
+        rename(temp_path, &key_path).await.unwrap();
+
+        let dest = File::open(key_path.as_path()).await.unwrap();
+        dest.sync_data().await.unwrap();
+        
+        Ok(())
     }
 
     async fn get(&self, key: &str) -> Option<Vec<u8>> {
-        unimplemented!()
+        
+        let key_path = self.key_path(key);
+        if !key_path.exists() { return None; }
+        
+        Some(read(key_path).await.unwrap())
     }
 
     async fn remove(&mut self, key: &str) -> bool {
-        unimplemented!()
+        
+        let key_path = self.key_path(key);
+        if !key_path.exists() { return false; }
+        
+        if !remove_file(key_path).await.is_ok() { return false; }
+
+        true
     }
 }
 

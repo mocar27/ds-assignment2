@@ -57,10 +57,28 @@ pub struct ClientRegisterCommand {
     pub content: ClientRegisterCommandContent,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ClientCommandHeader {
+    pub request_identifier: u64,
+    pub sector_idx: SectorIdx,
+}
+
+#[derive(Debug, Clone)]
+pub enum ClientRegisterCommandContent {
+    Read,
+    Write { data: SectorVec },
+}
+
 #[derive(Debug, Clone)]
 pub struct SystemRegisterCommand {
     pub header: SystemCommandHeader,
     pub content: SystemRegisterCommandContent,
+}
+#[derive(Debug, Clone, Copy)]
+pub struct SystemCommandHeader {
+    pub process_identifier: u8,
+    pub msg_ident: Uuid,
+    pub sector_idx: SectorIdx,
 }
 
 #[derive(Debug, Clone)]
@@ -77,25 +95,6 @@ pub enum SystemRegisterCommandContent {
         data_to_write: SectorVec,
     },
     Ack,
-}
-
-#[derive(Debug, Clone)]
-pub enum ClientRegisterCommandContent {
-    Read,
-    Write { data: SectorVec },
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct ClientCommandHeader {
-    pub request_identifier: u64,
-    pub sector_idx: SectorIdx,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SystemCommandHeader {
-    pub process_identifier: u8,
-    pub msg_ident: Uuid,
-    pub sector_idx: SectorIdx,
 }
 
 #[derive(Debug, Clone)]
