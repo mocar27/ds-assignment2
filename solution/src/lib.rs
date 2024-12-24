@@ -5,6 +5,7 @@ mod register_client;
 mod register_process;
 mod sectors_manager;
 mod transfer_operations;
+mod utils;
 
 pub use crate::domain::*;
 pub use atomic_register_public::*;
@@ -95,7 +96,8 @@ pub mod sectors_manager_public {
 // They convert bytes to a RegisterCommand object and in the other direction, respectively. 
 // They shall implement the message formats as described above (see the description of TCP communication).
 pub mod transfer_public {
-    use crate::{transfer_operations::chuj, RegisterCommand};
+    use crate::RegisterCommand;
+    use crate::transfer_operations::{deserialize_rc, serialize_rc};
     use std::io::Error;
     use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -104,7 +106,7 @@ pub mod transfer_public {
         hmac_system_key: &[u8; 64],
         hmac_client_key: &[u8; 32],
     ) -> Result<(RegisterCommand, bool), Error> {
-        unimplemented!()
+        deserialize_rc(data, hmac_system_key, hmac_client_key).await
     }
 
     pub async fn serialize_register_command(
@@ -112,7 +114,7 @@ pub mod transfer_public {
         writer: &mut (dyn AsyncWrite + Send + Unpin),
         hmac_key: &[u8],
     ) -> Result<(), Error> {
-        unimplemented!()
+        serialize_rc(cmd, writer, hmac_key).await
     }
 }
 
