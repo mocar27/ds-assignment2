@@ -8,6 +8,7 @@ pub enum SerializationError {
     InvalidHMAC,
     InvalidMagicNumber,
     InvalidMessageType,
+    InvaildData,
 }
 
 impl fmt::Display for SerializationError {
@@ -17,6 +18,7 @@ impl fmt::Display for SerializationError {
             SerializationError::InvalidHMAC => write!(f, "Invalid HMAC signature"),
             SerializationError::InvalidMagicNumber => write!(f, "Invalid magic number"),
             SerializationError::InvalidMessageType => write!(f, "Invalid message type"),
+            SerializationError::InvaildData => write!(f, "Invalid data"),
         }
     }
 }

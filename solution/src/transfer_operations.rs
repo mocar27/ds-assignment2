@@ -6,7 +6,7 @@ use sha2::Sha256;
 use std::convert::TryFrom;
 use std::io::Error;
 
-use crate::{utils::SerializationError, MAGIC_NUMBER, SectorIdx, SectorVec, StatusCode, 
+use crate::{utils::SerializationError, MAGIC_NUMBER, SectorIdx, SectorVec, 
     RegisterCommand, ClientRegisterCommand, ClientCommandHeader, ClientRegisterCommandContent, 
     SystemRegisterCommand, SystemCommandHeader, SystemRegisterCommandContent};
 
@@ -24,7 +24,7 @@ pub enum MessageType {
     Value =  0x04,
     WriteProc = 0x05,
     Ack = 0x06,
-    // We don't create reponse types, as we will do it on the fly adding 0x40 to original message
+    // We don't create response types, as we will do it on the fly by adding 0x40 to original message.
     // For the sake of simplicity, we will not divide it into two different enums.
 }
 
@@ -44,16 +44,139 @@ impl TryFrom<u8> for MessageType {
     }
 }
 
-pub fn construct_client_message() {
-    unimplemented!()
+// Mac verification as in dslab05, we don't calculate the HMAC tag, as it is part of the deserialized message.
+// We read the data and update mac on the spot to later compare it with the received tag (as described in lab).
+// When invalid HMAC tag is detected, we will still parse whole message, 
+// but we will return the false flag in the tuple.
+async fn construct_client_command(
+    data: &mut (dyn AsyncRead + Send + Unpin),
+    mac: &mut HmacSha256,
+    msg_type: MessageType,
+) -> Result<(RegisterCommand, bool), Error> {
+    let mut buff = [0u8; 8];
+    data.read_exact(&mut buff).await?;
+    mac.update(&buff);
+    let rid: u64 = u64::from_be_bytes(buff);
+
+    let mut buff = [0u8; 8];
+    data.read_exact(&mut buff).await?;
+    mac.update(&buff);
+    let sidx: SectorIdx = u64::from_be_bytes(buff);
+
+    let header = ClientCommandHeader {
+        request_identifier: rid,
+        sector_idx: sidx,
+    };
+
+    let content = match msg_type {
+        MessageType::Read => ClientRegisterCommandContent::Read,
+        MessageType::Write => {
+            let mut buff = [0u8; 4096];
+            data.read_exact(&mut buff).await?;
+            mac.update(&buff);
+            ClientRegisterCommandContent::Write { data: SectorVec(buff.to_vec()) }
+        },
+        _ => Err(SerializationError::InvaildData)?,
+    }; 
+
+    let mut hmac_tag = [0u8; 32];
+    data.read_exact(&mut hmac_tag).await?;
+
+    let is_valid = mac.clone().verify_slice(&hmac_tag).is_ok();
+    Ok((RegisterCommand::Client(ClientRegisterCommand { header, content }), is_valid))
 }
 
-pub fn construct_system_message() {
-    unimplemented!()
+async fn construct_system_command(
+    data: &mut (dyn AsyncRead + Send + Unpin),
+    mac: &mut HmacSha256,
+    process_rank: u8,
+    msg_type: MessageType,
+) -> Result<(RegisterCommand, bool), Error> {
+    let mut buff = [0u8; 16];
+    data.read_exact(&mut buff).await?;
+    mac.update(&buff);
+    let uid = uuid::Uuid::from_slice(&buff).unwrap();
+
+    let mut buff = [0u8; 8];
+    data.read_exact(&mut buff).await?;
+    mac.update(&buff);
+    let sidx: SectorIdx = u64::from_be_bytes(buff);
+    
+    let mut hmac_tag = [0u8; 32];
+    data.read_exact(&mut hmac_tag).await?;
+    
+    let header = SystemCommandHeader {
+        process_identifier: process_rank,
+        msg_ident: uid,
+        sector_idx: sidx,
+    };
+
+    let content = match msg_type {
+        MessageType::ReadProc => SystemRegisterCommandContent::ReadProc,
+        MessageType::Ack => SystemRegisterCommandContent::Ack,
+        _ => Err(SerializationError::InvaildData)?,
+    };
+
+    let is_valid = mac.clone().verify_slice(&hmac_tag).is_ok();
+    Ok((RegisterCommand::System(SystemRegisterCommand { header, content }), is_valid))
 }
 
-pub fn construct_advanced_system_message() {
-    unimplemented!()
+async fn construct_advanced_system_command(
+    data: &mut (dyn AsyncRead + Send + Unpin),
+    mac: &mut HmacSha256,
+    process_rank: u8,
+    msg_type: MessageType,
+) -> Result<(RegisterCommand, bool), Error> {
+    let mut buff = [0u8; 16];
+    data.read_exact(&mut buff).await?;
+    mac.update(&buff);
+    let uid = uuid::Uuid::from_slice(&buff).unwrap();
+
+    let mut buff = [0u8; 8];
+    data.read_exact(&mut buff).await?;
+    mac.update(&buff);
+    let sidx: SectorIdx = u64::from_be_bytes(buff);
+
+    let mut buff = [0u8; 8];
+    data.read_exact(&mut buff).await?;
+    mac.update(&buff);
+    let ts = u64::from_be_bytes(buff);
+
+    let mut buff = [0u8; 8];
+    data.read_exact(&mut buff).await?;
+    mac.update(&buff);
+    let value_wr = buff[7];
+
+    let mut buff = [0u8; 4096];
+    data.read_exact(&mut buff).await?;
+    mac.update(&buff);
+    let svec = SectorVec(buff.to_vec());
+
+    let mut hmac_tag = [0u8; 32];
+    data.read_exact(&mut hmac_tag).await?;
+
+    let header = SystemCommandHeader {
+        process_identifier: process_rank,
+        msg_ident: uid,
+        sector_idx: sidx,
+    };
+
+    let content = match msg_type {
+        MessageType::Value => SystemRegisterCommandContent::Value { 
+            timestamp: ts, 
+            write_rank: value_wr, 
+            sector_data: svec,
+        },
+        MessageType::WriteProc => SystemRegisterCommandContent::WriteProc { 
+            timestamp: ts, 
+            write_rank: value_wr, 
+            data_to_write: svec,
+        },
+        _ => Err(SerializationError::InvaildData)?,
+    };
+
+    let is_valid = mac.clone().verify_slice(&hmac_tag).is_ok();
+    Ok((RegisterCommand::System(SystemRegisterCommand { header, content }), is_valid))
 }
 
 // Bytes (received on input) -> RegisterCommand (Client or System)
@@ -63,7 +186,7 @@ pub async fn deserialize_rc(
     hmac_client_key: &[u8; 32],
 ) -> Result<(RegisterCommand, bool), Error> {
     
-    // MAGIC_NUMBER [0..4], Padding [4..6], ProcessRank (only if msg of type P2P) [6], MsgType [7]  
+    // MAGIC_NUMBER [0..4], Padding [4..6], ProcessRank (if exists) [6], MsgType [7]  
     let mut valid_magic_number=  [0u8; 4];
     data.read_exact(&mut valid_magic_number).await?;
 
@@ -78,36 +201,37 @@ pub async fn deserialize_rc(
     data.read_exact(&mut buff).await?;
 
     // Magic number correct, skipping padding => msg_type is 4th buff element.
+    // Process rank is 3rd element of the buffer (it existsts only for process - process communication).
+    // If a message type is invalid, the solution will discard the magic number and the following 4 bytes (8 bytes in total).
+    // It will throw the error here, after already reading the 8 bytes.
     let msg_type = MessageType::try_from(buff[3]).unwrap();
 
-    // If a message type is invalid, the solution shall discard the magic number and the following 4 bytes (8 bytes in total).
     match msg_type {
         MessageType::Read| MessageType::Write => {
             // Client to process message
-            // Read the rest of the message and validate HMAC
-            // If the HMAC is invalid, the solution shall return an error.
-            unimplemented!()
+            // The HMAC tag is a hmac(sh256) tag of the entire message (from the magic number to the end of the content).
+            let mut mac = HmacSha256::new_from_slice(hmac_client_key).unwrap();
+            mac.update(&valid_magic_number);
+            mac.update(&buff);
+            construct_client_command(data, &mut mac, msg_type).await
         },
         MessageType::ReadProc | MessageType::Ack => {
             // Process to process message
-            // Read the rest of the message and validate HMAC
-            // If the HMAC is invalid, the solution shall return an error.
-            unimplemented!()
+            // The HMAC tag is a hmac(sh256) tag of the entire message (from the magic number to the end of the content).
+            let mut mac = HmacSha256::new_from_slice(hmac_system_key).unwrap();
+            mac.update(&valid_magic_number);
+            mac.update(&buff);
+            construct_system_command(data, &mut mac, buff[2], msg_type).await
         },
         MessageType::Value | MessageType::WriteProc => {
-            // Process to process message (advanced)
-            // Read the rest of the message and validate HMAC
-            // If the HMAC is invalid, the solution shall return an error.
-            unimplemented!()
+            // Process to process message (advanced - response is different)
+            // The HMAC tag is a hmac(sh256) tag of the entire message (from the magic number to the end of the content).
+            let mut mac = HmacSha256::new_from_slice(hmac_system_key).unwrap();
+            mac.update(&valid_magic_number);
+            mac.update(&buff);
+            construct_advanced_system_command(data, &mut mac, buff[2], msg_type).await
         },
     }
-
-
-
-    // Deserialization shall return a pair (message, hmac_valid) 
-    // when a valid magic number and a valid message type is encountered. 
-
-    // return 
 }
 
 // RegisterCommand (received on input) -> bytes (written to writer recived on input)
@@ -119,11 +243,15 @@ pub async fn serialize_rc(
 
     // Serialization shall complete successfully when there are no errors 
     // when writing to the provided reference that implements AsyncWrite. 
+    // (it meaans that if there is error, return it immediately)
 
     // Read the RegisterCommand and construct bytes data from it (message content descirbed in task description)
+
+    // Based on the information in the given RegisterCommand, we want to construct (as given in the task description)
+    // message to be sent over the network.
 
     // If errors occur, the serializing function shall return them.
 
     unimplemented!() 
 }
-
+ 
