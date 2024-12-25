@@ -1,4 +1,4 @@
-// Serialize & Deserialize data operations
+// Serialize & Deserialize data operations for RegisterCommand.
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
 use hmac::{Hmac, Mac};
@@ -24,7 +24,6 @@ pub enum MessageType {
     Value =  0x04,
     WriteProc = 0x05,
     Ack = 0x06,
-    // We don't create response types, as we will do it on the fly by adding 0x40 to original message.
     // For the sake of simplicity, we will not divide it into two different enums.
 }
 
@@ -186,7 +185,6 @@ pub async fn deserialize_rc(
     hmac_client_key: &[u8; 32],
 ) -> Result<(RegisterCommand, bool), Error> {
     
-    // MAGIC_NUMBER [0..4], Padding [4..6], ProcessRank (if exists) [6], MsgType [7]  
     let mut valid_magic_number=  [0u8; 4];
     data.read_exact(&mut valid_magic_number).await?;
 
@@ -206,10 +204,11 @@ pub async fn deserialize_rc(
     // It will throw the error here, after already reading the 8 bytes.
     let msg_type = MessageType::try_from(buff[3]).unwrap();
 
+    // The HMAC tag is a hmac(sh256) tag of the entire message (from the magic number to the end of the content),
+    // so we construct the initial mac here with already read data.
     match msg_type {
         MessageType::Read| MessageType::Write => {
             // Client to process message
-            // The HMAC tag is a hmac(sh256) tag of the entire message (from the magic number to the end of the content).
             let mut mac = HmacSha256::new_from_slice(hmac_client_key).unwrap();
             mac.update(&valid_magic_number);
             mac.update(&buff);
@@ -217,7 +216,6 @@ pub async fn deserialize_rc(
         },
         MessageType::ReadProc | MessageType::Ack => {
             // Process to process message
-            // The HMAC tag is a hmac(sh256) tag of the entire message (from the magic number to the end of the content).
             let mut mac = HmacSha256::new_from_slice(hmac_system_key).unwrap();
             mac.update(&valid_magic_number);
             mac.update(&buff);
@@ -225,13 +223,97 @@ pub async fn deserialize_rc(
         },
         MessageType::Value | MessageType::WriteProc => {
             // Process to process message (advanced - response is different)
-            // The HMAC tag is a hmac(sh256) tag of the entire message (from the magic number to the end of the content).
             let mut mac = HmacSha256::new_from_slice(hmac_system_key).unwrap();
             mac.update(&valid_magic_number);
             mac.update(&buff);
             construct_advanced_system_command(data, &mut mac, buff[2], msg_type).await
         },
     }
+}
+
+// Serialization shall complete successfully when there are no errors 
+// when writing to the provided reference that implements AsyncWrite. 
+// (it means that if there is error, return it immediately)
+// Read the RegisterCommand and construct bytes data from it (message content descirbed in task description)
+// RegisterCommand (received on input) -> Bytes (written to writer recived on input)
+async fn serialize_client_rc(
+    header: &ClientCommandHeader,
+    content: &ClientRegisterCommandContent
+) -> Result<Vec<u8>, Error> {
+    let mut buff = Vec::<u8>::new();
+    buff.write_all(&MAGIC_NUMBER).await?;
+
+    let msg_type = match content {
+        ClientRegisterCommandContent::Read => MessageType::Read,
+        ClientRegisterCommandContent::Write { data: _ } => MessageType::Write
+    };
+
+    // As MessageType is translatable to u8, we can write it directly to the buffer.
+    // Writing padding and the message type to the buffer.
+    buff.write_all(&[0, 0, 0, msg_type as u8]).await?;
+
+    // Respectively, writing all the data contained in the header and the content of RegisterCommand.
+    let rid = header.request_identifier.to_be_bytes();
+    buff.write_all(&rid).await?;
+
+    let sidx = header.sector_idx.to_be_bytes();
+    buff.write_all(&sidx).await?;
+
+    match content {
+        ClientRegisterCommandContent::Read => (),
+        ClientRegisterCommandContent::Write { data } => {
+            buff.write_all(&data.0).await?;
+        }
+    }
+
+    Ok(buff)
+}
+
+async fn serialize_system_rc(
+    header: &SystemCommandHeader,
+    content: &SystemRegisterCommandContent
+) -> Result<Vec<u8>, Error> {
+    let mut buff = Vec::<u8>::new();
+    buff.write_all(&MAGIC_NUMBER).await?;
+
+    let msg_type = match content {
+        SystemRegisterCommandContent::ReadProc => MessageType::ReadProc,
+        SystemRegisterCommandContent::Ack => MessageType::Ack,
+        SystemRegisterCommandContent::Value { timestamp: _, write_rank: _, sector_data: _ } => MessageType::Value,
+        SystemRegisterCommandContent::WriteProc { timestamp: _, write_rank: _, data_to_write: _ } => MessageType::WriteProc,
+    };
+
+    buff.write_all(&[0, 0, header.process_identifier, msg_type as u8]).await?;
+
+    let uid = header.msg_ident.as_bytes();
+    buff.write_all(uid).await?;
+
+    let sidx = header.sector_idx.to_be_bytes();
+    buff.write_all(&sidx).await?;
+
+    match content {
+        SystemRegisterCommandContent::ReadProc | SystemRegisterCommandContent::Ack => (),
+        SystemRegisterCommandContent::Value { timestamp, write_rank, sector_data } => {
+            let ts = timestamp.to_be_bytes();
+            buff.write_all(&ts).await?;
+
+            let wr = write_rank.to_be_bytes();
+            buff.write_all(&wr).await?;
+
+            buff.write_all(&sector_data.0).await?;
+        },
+        SystemRegisterCommandContent::WriteProc { timestamp, write_rank, data_to_write } => {
+            let ts = timestamp.to_be_bytes();
+            buff.write_all(&ts).await?;
+
+            let wr = write_rank.to_be_bytes();
+            buff.write_all(&wr).await?;
+
+            buff.write_all(&data_to_write.0).await?;
+        },
+    }
+
+    Ok(buff)
 }
 
 // RegisterCommand (received on input) -> bytes (written to writer recived on input)
@@ -241,17 +323,21 @@ pub async fn serialize_rc(
     hmac_key: &[u8],
 ) -> Result<(), Error> {
 
-    // Serialization shall complete successfully when there are no errors 
-    // when writing to the provided reference that implements AsyncWrite. 
-    // (it meaans that if there is error, return it immediately)
+    let mut data = match cmd {
+        RegisterCommand::Client(ClientRegisterCommand { header, content}) => {
+            serialize_client_rc(header, content).await?
+        }
+        RegisterCommand::System(SystemRegisterCommand { header, content}) => {
+            serialize_system_rc(header, content).await?
+        }
+    };
 
-    // Read the RegisterCommand and construct bytes data from it (message content descirbed in task description)
+    let mut mac = HmacSha256::new_from_slice(hmac_key).unwrap();
+    mac.update(&data);
+    let tag: [u8; 32] = mac.finalize().into_bytes().as_slice().try_into().unwrap();
+    data.write_all(&tag).await?;
 
-    // Based on the information in the given RegisterCommand, we want to construct (as given in the task description)
-    // message to be sent over the network.
-
-    // If errors occur, the serializing function shall return them.
-
-    unimplemented!() 
+    writer.write_all(&data).await?;
+    Ok(())
 }
  

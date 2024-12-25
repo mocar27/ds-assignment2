@@ -1,4 +1,4 @@
-// Common functions shared across the files
+// Common utilities shared across the files
 use std::io::{Error, ErrorKind};
 use std::fmt;
 
