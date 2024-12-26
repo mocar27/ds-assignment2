@@ -6,7 +6,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::pin::Pin;
 use std::future::Future;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 use tokio::io::{AsyncRead, AsyncWrite};
 use std::convert::TryFrom;
@@ -22,9 +21,6 @@ pub struct AtomicRegisterState {
     // Identifiers of AtomicRegister are numbered starting at 1 (up to the number of processes in the system).
     self_ident: u8,
 
-    // Given AtomicRegister operates on given on the input sector_idx.
-    sector_idx: SectorIdx,
-
     // RegisterClient is used to communicate with other processes of the system.
     register_client: Arc<dyn RegisterClient>,
 
@@ -37,10 +33,10 @@ pub struct AtomicRegisterState {
     // Timestamp, Write rank, Value as described in the algorithm.
     ts: u64,
     wr: u8,
-    val: Option<SectorVec>,
+    val: SectorVec,
 
-    // Map of reading by processes, with the timestamp, write rank and value respectively.
-    readlist: HashMap<u8, (u64, u8, Option<SectorVec>)>,
+    // Map of reading by processes, with the (timestamp, write rank, value) respectively.
+    readlist: HashMap<u8, (u64, u8, SectorVec)>,
     
     // Set of processes that have accepted the write request (Write-Consult-Majority). 
     acklist: HashSet<u8>,
@@ -48,8 +44,8 @@ pub struct AtomicRegisterState {
     // Fields specified by the algorithm description for the AtomicRegister.
     reading: bool,
     writing: bool,
-    writeval: Option<SectorVec>,
-    readval: Option<SectorVec>,
+    writeval: SectorVec,
+    readval: SectorVec,
     write_phase: bool,
 
     // After the client command is completed, we expect callback to be called.
@@ -57,24 +53,6 @@ pub struct AtomicRegisterState {
 
     // Operation identifier needed by the algorithm, generated in given places, later checked for identity.
     op_id: Option<Uuid>,
-}
-
-// Every sector is logically a separate atomic register. 
-// However, you should not keep Configuration.public.n_sectors AtomicRegister objects in memory; 
-// instead, you should dynamically create and delete them to limit the memory usage (see also the Technical Requirements section).
-
-// Your solution can use memory linear in the number of sectors, which have been written to.
-// It should not use memory linear in the total number of sectors.
-
-// Despite above message, it should work, as we won't hold straight n_sectors AtomicRegister objects in memory
-// but rather we will keep for each currently proccessed sector the AtomicRegister that is processing given sector
-// and it should work fine.
-
-// Therefore, to improve the performance of Atomic Disk Device, 
-// one can run multiple instances of the atomic register logic, 
-// each progressing on a different sector.
-struct MultiSectorAtomicRegister {
-    registers: HashMap<SectorIdx, Arc<Mutex<AtomicRegisterState>>>,
 }
 
 impl AtomicRegisterState {
@@ -94,6 +72,35 @@ impl AtomicRegisterState {
     // then o must appear before o' on such a common timeline. 
     // This is called linearization.
 
+    pub async fn new(
+        self_ident: u8,
+        register_client: Arc<dyn RegisterClient>,
+        sectors_manager: Arc<dyn SectorsManager>,
+        processes_count: u8,
+        ts: u64,
+        wr: u8,
+        val: SectorVec,
+    ) -> Self {
+        AtomicRegisterState {
+            self_ident,
+            register_client,
+            sectors_manager,
+            processes_count,
+            ts,
+            wr,
+            val,
+            readlist: HashMap::new(),
+            acklist: HashSet::new(),
+            reading: false,
+            writing: false,
+            writeval: SectorVec(Vec::new()),
+            readval: SectorVec(Vec::new()),
+            write_phase: false,
+            callback: None,
+            op_id: None,
+        }
+    }
+
 }
 
 #[async_trait::async_trait]
@@ -110,7 +117,10 @@ impl AtomicRegister for AtomicRegisterState {
         unimplemented!()
     }
 
-    async fn system_command(&mut self, cmd: SystemRegisterCommand) {
+    async fn system_command(
+        &mut self, 
+        cmd: SystemRegisterCommand
+    ) {
         unimplemented!()
     }
 }

@@ -22,6 +22,7 @@ pub mod atomic_register_public {
         ClientRegisterCommand, OperationSuccess, RegisterClient, SectorIdx, SectorsManager,
         SystemRegisterCommand,
     };
+    use crate::atomic_register::AtomicRegisterState;
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::Arc;
@@ -64,18 +65,25 @@ pub mod atomic_register_public {
         sectors_manager: Arc<dyn SectorsManager>,
         processes_count: u8,
     ) -> Box<dyn AtomicRegister> {
-        unimplemented!()
-        // recover data and metadata from sectors_manager
-        // and if they exist for given SectorIdx, then return AtomicRegisterImpl
-        // with fields as described in the algorithm and recovered data
 
-        // if they do not exist, then return AtomicRegisterImpl with initial fields 
+        // Recover data and metadata from sectors_manager
+        // to handle the recovery event in the (N,N)-AtomicRegister algorithm
 
-        // and that's all the logic behind init and recover and what will this exact function do
-
-        // handling rest of messages, as processting commands will be done in other file
-
-        // the last case is this case of performance -- should we save the SectorIdx to a Map?
+        // If the data was never written to the sector, then these functions will return
+        // default values for the data and metadata, which are zero-th vector for val
+        // and (0, 0) for ts and wr (sectors_manager implementation problem).
+        let val = sectors_manager.read_data(sector_idx).await;
+        let (ts, wr) = sectors_manager.read_metadata(sector_idx).await;
+        
+        Box::new(AtomicRegisterState::new(
+            self_ident, 
+            register_client, 
+            sectors_manager, 
+            processes_count, 
+            ts, 
+            wr, 
+            val
+        ).await)
     }
 }
 
