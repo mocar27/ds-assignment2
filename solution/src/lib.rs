@@ -65,6 +65,17 @@ pub mod atomic_register_public {
         processes_count: u8,
     ) -> Box<dyn AtomicRegister> {
         unimplemented!()
+        // recover data and metadata from sectors_manager
+        // and if they exist for given SectorIdx, then return AtomicRegisterImpl
+        // with fields as described in the algorithm and recovered data
+
+        // if they do not exist, then return AtomicRegisterImpl with initial fields 
+
+        // and that's all the logic behind init and recover and what will this exact function do
+
+        // handling rest of messages, as processting commands will be done in other file
+
+        // the last case is this case of performance -- should we save the SectorIdx to a Map?
     }
 }
 
