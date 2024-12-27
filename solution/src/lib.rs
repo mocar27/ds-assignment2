@@ -1,5 +1,4 @@
 mod domain;
-mod stable_storage;
 mod atomic_register;
 mod register_client;
 mod register_process;
@@ -14,6 +13,8 @@ pub use sectors_manager_public::*;
 pub use transfer_public::*;
 
 pub async fn run_register_process(config: Configuration) {
+    // We expect that within 300 milliseconds after calling run_register_process() a TCP socket will be bound. 
+    // We suggest the function binds to the appropriate socket before executing other actions.
     unimplemented!()
 }
 
