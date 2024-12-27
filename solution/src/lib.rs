@@ -65,7 +65,6 @@ pub mod atomic_register_public {
         sectors_manager: Arc<dyn SectorsManager>,
         processes_count: u8,
     ) -> Box<dyn AtomicRegister> {
-
         // Recover data and metadata from sectors_manager
         // to handle the recovery event in the (N,N)-AtomicRegister algorithm
 
@@ -90,6 +89,7 @@ pub mod atomic_register_public {
 
 pub mod sectors_manager_public {
     use crate::{SectorIdx, SectorVec};
+    use crate::sectors_manager::SectorsManagerState;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -109,7 +109,9 @@ pub mod sectors_manager_public {
 
     /// Path parameter points to a directory to which this method has exclusive access.
     pub async fn build_sectors_manager(path: PathBuf) -> Arc<dyn SectorsManager> {
-        unimplemented!()
+        Arc::new(SectorsManagerState::new(
+            path
+        ).await)
     }
 }
 
