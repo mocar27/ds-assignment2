@@ -11,3 +11,33 @@
 // 2. There is a limit on the number of open file descriptors: 1024. 
 // We suggest utilizing it for maximum concurrency. 
 // There will not be more than 16 client connections.
+
+
+use std::sync::Arc;
+use async_channel::{bounded, unbounded, Receiver, Sender};
+use tokio::net::TcpStream;
+
+use crate::{SectorIdx, RegisterClient, RegisterCommand, SystemRegisterCommand,
+    Send, Broadcast, serialize_register_command, deserialize_register_command};
+
+
+pub struct RegisterClientState {
+
+}
+
+impl RegisterClientState {
+    pub fn new() -> Self {
+        RegisterClientState {}
+    }
+}
+
+#[async_trait::async_trait]
+impl RegisterClient for RegisterClientState {
+    async fn send(&self, msg: Send) {
+        unimplemented!()
+    }
+
+    async fn broadcast(&self, msg: Broadcast) {
+
+    }
+}
