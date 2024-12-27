@@ -70,13 +70,14 @@ pub mod atomic_register_public {
         // to handle the recovery event in the (N,N)-AtomicRegister algorithm
 
         // If the data was never written to the sector, then these functions will return
-        // default values for the data and metadata, which are zero-th vector for val
+        // default values for the data and metadata, which are zero-th vector of size 4096 for val
         // and (0, 0) for ts and wr (sectors_manager implementation problem).
-        let val = sectors_manager.read_data(sector_idx).await;
         let (ts, wr) = sectors_manager.read_metadata(sector_idx).await;
+        let val = sectors_manager.read_data(sector_idx).await;
         
         Box::new(AtomicRegisterState::new(
             self_ident, 
+            sector_idx,
             register_client, 
             sectors_manager, 
             processes_count, 
