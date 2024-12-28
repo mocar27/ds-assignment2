@@ -116,8 +116,6 @@ pub mod sectors_manager_public {
     }
 }
 
-// They convert bytes to a RegisterCommand object and in the other direction, respectively. 
-// They shall implement the message formats as described above (see the description of TCP communication).
 pub mod transfer_public {
     use crate::transfer_operations::{deserialize_rc, serialize_rc};
     use crate::RegisterCommand;
