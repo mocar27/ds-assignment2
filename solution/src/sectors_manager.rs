@@ -27,7 +27,7 @@ impl SectorsManagerState {
     ) -> Self {
         // Check whether the directory even exists and possibly recover after crash.
         let dir = read_dir(&path).await.expect("Given path for storage doesn't exist");
-        let data_access = Self::sectors_crash_recovery(dir).await;
+        let data_access = Self::sectors_crash_recovery(&path, dir).await;
 
         SectorsManagerState {
             path,
@@ -39,7 +39,7 @@ impl SectorsManagerState {
         self.path.join(format!("{}_{}_{}", idx, ts, wr))
     }
 
-    async fn sectors_crash_recovery(mut dir: ReadDir) -> HashMap<SectorIdx, (u64, u8)> {
+    async fn sectors_crash_recovery(path: &PathBuf, mut dir: ReadDir) -> HashMap<SectorIdx, (u64, u8)> {
         // In case, that we are not creating from zero the storage directory,
         // which basically means that we are recovering from the previous state.
         // We will iterate over the files in the directory and recover all of the data
@@ -61,7 +61,19 @@ impl SectorsManagerState {
                 let ts = parts[1].parse::<u64>().expect("Failed to parse timestamp");
                 let wr = parts[2].parse::<u8>().expect("Failed to parse write rank");
 
-                data_access.insert(sidx, (ts, wr));
+                // Crash may occure before deleting old file, so we ensure that we are not inluding old file. 
+                let (old_ts, old_wr) = data_access.get(&sidx).cloned().unwrap_or((0, 0));
+                if (old_ts, old_wr) == (0, 0) {
+                    data_access.insert(sidx, (ts, wr));
+                }
+                else if (ts, wr) > (old_ts, old_wr) {
+                    let old_file_path = path.join(format!("{}_{}_{}", sidx, old_ts, old_wr));
+                    remove_file(old_file_path).await.expect("Failed to remove old sector file");
+                    data_access.insert(sidx, (ts, wr));
+                }
+                else {
+                    remove_file(entry.path()).await.expect("Failed to remove invalid file");
+                }
             }
         }
         data_access

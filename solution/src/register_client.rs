@@ -38,6 +38,6 @@ impl RegisterClient for RegisterClientState {
     }
 
     async fn broadcast(&self, msg: Broadcast) {
-
+        unimplemented!()
     }
 }
