@@ -6,6 +6,10 @@ mod sectors_manager;
 mod transfer_operations;
 mod utils;
 
+use tokio::net::TcpListener;
+use async_channel::unbounded;
+use crate::register_client::RegisterClientState;
+
 pub use crate::domain::*;
 pub use atomic_register_public::*;
 pub use register_client_public::*;
@@ -13,9 +17,32 @@ pub use sectors_manager_public::*;
 pub use transfer_public::*;
 
 pub async fn run_register_process(config: Configuration) {
-    // We expect that within 300 milliseconds after calling run_register_process() a TCP socket will be bound. 
-    // We suggest the function binds to the appropriate socket before executing other actions.
-    unimplemented!()
+    // Bind the listener to the address first, as told to in the task.
+    let addr = config.public.tcp_locations.get(config.public.self_rank as usize - 1)
+        .expect("Self rank is out of tcp_locations vector bounds")
+        .clone();
+
+    let listener = TcpListener::bind(addr).await.expect("Failed to bind to address");
+
+    // Create sectors manager that will operate on that directory.
+    let sectors_manager = build_sectors_manager(config.public.storage_dir).await;
+
+    // Channel for sending messages to self, so we are skipping serialization, deserialization, TCP, etc.
+    let (self_tx, self_rx) = unbounded::<SystemRegisterCommand>();
+
+    let register_client = RegisterClientState::new(
+            config.public.self_rank,
+            config.hmac_system_key,
+            self_tx,
+            config.public.tcp_locations.len() as u8,
+            config.public.tcp_locations
+        ).await;
+
+    let self_handler = tokio::spawn()
+        
+    // let (stream, _) = listener.accept().await.expect("Failed to accept connection");
+
+    // Here (register_process) tokio handles the communication with each of the linux processes.
 }
 
 pub mod atomic_register_public {

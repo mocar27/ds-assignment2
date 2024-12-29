@@ -13,8 +13,8 @@
 // Retransmission will continue until the receiver acknowledges that process has recovered.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use async_channel::{bounded, unbounded, Receiver, Sender};
+use std::sync::Arc;
+use async_channel::{Receiver, Sender, unbounded};
 use tokio::net::TcpStream;
 
 use crate::{SectorIdx, RegisterClient, RegisterCommand, SystemRegisterCommand,
@@ -28,26 +28,51 @@ pub struct RegisterClientState {
     processes_count: u8,
 
     // As messages to itself should skip TCP, we will insert them to internal channel.
-    self_tx: Sender<Box<SystemRegisterCommand>>,
+    self_tx: Sender<SystemRegisterCommand>,
 
     // Channel for sending messages to other processes.
-    processes_txs: Vec<Sender<Box<SystemRegisterCommand>>>,
+    // processes_txs: Vec<Sender<Box<SystemRegisterCommand>>>,
 
     // Channel inside which we put messages that potentially would need to be retransmitted.
     retransmission_messages_tx: Sender<Box<SystemRegisterCommand>>,
 }
 
 impl RegisterClientState {
-    pub fn new() -> Self {
-        RegisterClientState {
+    pub async fn new(
+        self_ident: u8,
+        hmac_system_key: [u8; 64],
+        self_tx: Sender<SystemRegisterCommand>,
+        processes_count: u8,
+        tcp_locations: Vec<(String, u16)>,
+    ) -> Self {
+        let (retransmission_messages_tx, retransmission_messages_rx) = unbounded();
 
+        for i in 0..processes_count {
+            
         }
+
+        // Spawn task that will handle retransmissions.
+        tokio::spawn(async move {
+            loop {
+                let msg = retransmission_messages_rx.recv().await.unwrap();
+                // Handle retransmission
+            }
+        });
+
         // Host and port, indexed by identifiers, of every process, including itself
         // (subtract 1 from self_rank to obtain index in this array).
         // You can assume that `tcp_locations.len() < 255`.
         // pub tcp_locations: Vec<(String, u16)>,
-    }
 
+        RegisterClientState {
+            self_ident,
+            hmac_system_key,
+            processes_count,
+            self_tx,
+            // processes_txs,
+            retransmission_messages_tx,
+        }
+    }
     // For receiving messages will be responsible other spawned task.
     // function to handle receiving messages from other processes and another one for retransmissions receiving
     // For example 500 ms is reasonable (for retransmissions).

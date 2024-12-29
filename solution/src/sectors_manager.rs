@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::collections::HashMap;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::fs::{read_dir, rename, remove_file, File, ReadDir};
+use tokio::fs::{create_dir_all, read_dir, rename, remove_file, File, ReadDir};
 
 use crate::{SectorIdx, SectorVec, SectorsManager};
 
@@ -25,8 +25,15 @@ impl SectorsManagerState {
     pub async fn new(
         path: PathBuf,
     ) -> Self {
-        // Check whether the directory even exists and possibly recover after crash.
-        let dir = read_dir(&path).await.expect("Given path for storage doesn't exist");
+        // Check whether the directory even exists (if not create it) and possibly recover after crash.
+        let dir = match read_dir(&path).await {
+            Ok(dir) => dir,
+            Err(_) => {
+                tokio::fs::create_dir_all(&path).await.expect("Failed to create storage directory");
+                read_dir(&path).await.expect("Failed to read storage directory")
+            }
+        };
+
         let data_access = Self::sectors_crash_recovery(&path, dir).await;
 
         SectorsManagerState {
