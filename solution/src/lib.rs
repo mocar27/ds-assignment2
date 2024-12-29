@@ -6,6 +6,7 @@ mod sectors_manager;
 mod transfer_operations;
 mod utils;
 
+use register_process::handle_self_messages;
 use tokio::net::TcpListener;
 use async_channel::unbounded;
 use crate::register_client::RegisterClientState;
@@ -38,10 +39,14 @@ pub async fn run_register_process(config: Configuration) {
             config.public.tcp_locations
         ).await;
 
-    let self_handler = tokio::spawn()
+    let self_handler = tokio::spawn(handle_self_messages(self_rx));
         
     // let (stream, _) = listener.accept().await.expect("Failed to accept connection");
 
+
+
+    
+    self_handler.await.expect("Self handler failed");
     // Here (register_process) tokio handles the communication with each of the linux processes.
 }
 
