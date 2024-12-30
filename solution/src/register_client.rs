@@ -105,7 +105,7 @@ impl RegisterClientState {
                 biased;
                 _ = interval.tick() => {
                     if let Some(command) = &cmd {
-                        connection_tx.send(command.clone()).await.expect("Failed to send retransmission message");
+                        connection_tx.send(command.clone()).await.expect("Failed to pass the retransmission message to sender task");
                     }
                 }
                 msg = retransmission_rx.recv() => {
