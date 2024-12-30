@@ -29,7 +29,7 @@ impl SectorsManagerState {
         let dir = match read_dir(&path).await {
             Ok(dir) => dir,
             Err(_) => {
-                tokio::fs::create_dir_all(&path).await.expect("Failed to create storage directory");
+                create_dir_all(&path).await.expect("Failed to create storage directory");
                 read_dir(&path).await.expect("Failed to read storage directory")
             }
         };

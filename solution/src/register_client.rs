@@ -16,10 +16,12 @@ use std::collections::HashMap;
 use async_channel::{Receiver, Sender, unbounded};
 use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedWriteHalf;
-use tokio::time::Duration;
+use tokio::time::{Duration, Instant, interval_at};
 
 use crate::{RegisterCommand, SystemRegisterCommand,
     RegisterClient, Send, Broadcast, serialize_register_command};
+
+pub static DELAY : Duration = Duration::from_millis(500);
 
 pub struct RegisterClientState {
     // Data needed for broadcasting and creating connections.
@@ -29,6 +31,9 @@ pub struct RegisterClientState {
     // Later the task will consume the message on the channel and send it to the target process.
     // This way we don't pass the sending socket to every task handler in the system.
     processes_txs: HashMap<u8, Sender<SystemRegisterCommand>>,
+
+    // Retransmission channel for every process in the system.
+    retransmission_txs: HashMap<u8, Sender<SystemRegisterCommand>>,
 }
 
 impl RegisterClientState {
@@ -41,8 +46,9 @@ impl RegisterClientState {
     ) -> Self {
         // Map of processes' identifiers to their sending channels (so that connection handlers know when to write).
         let mut processes_txs = HashMap::new();
-        processes_txs.insert(self_ident, self_tx);
-
+        let mut retransmission_txs = HashMap::new();
+        processes_txs.insert(self_ident.clone(), self_tx.clone());
+        retransmission_txs.insert(self_ident.clone(), self_tx.clone());
 
         // After 300 ms all processes should have called bind and already be listening.
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -55,18 +61,22 @@ impl RegisterClientState {
                 stream.set_nodelay(true).expect("Failed to set nodelay");
 
                 let (connection_tx, connection_rx) = unbounded::<SystemRegisterCommand>();
+                let (retransmission_tx, retransmission_rx) = unbounded::<SystemRegisterCommand>();
                 
                 let process_ident = i + 1;
-                processes_txs.insert(process_ident.clone(), connection_tx);
+                processes_txs.insert(process_ident.clone(), connection_tx.clone());
+                retransmission_txs.insert(process_ident.clone(), retransmission_tx.clone());
 
                 let (_, writer) = stream.into_split();
                 tokio::spawn(Self::handle_writing(hmac_system_key, writer, connection_rx));
+                tokio::spawn(Self::handle_retransmission(connection_tx, retransmission_rx));
             }
         }
 
         RegisterClientState {
             processes_count,
             processes_txs,
+            retransmission_txs,
         }
     }
 
@@ -82,6 +92,28 @@ impl RegisterClientState {
             let _ = serialize_register_command(&cmd, &mut writer, &hmac_system_key).await;
         }
     }
+
+    async fn handle_retransmission(
+        connection_tx: Sender<SystemRegisterCommand>,
+        retransmission_rx: Receiver<SystemRegisterCommand>,
+    ) {
+        let mut interval = interval_at(Instant::now() + DELAY, DELAY);
+        let mut cmd: Option<SystemRegisterCommand> = None;
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if let Some(command) = &cmd {
+                        connection_tx.send(command.clone()).await.expect("Failed to send retransmission message");
+                    }
+                }
+                msg = retransmission_rx.recv() => {
+                    cmd = msg.ok();
+                    interval = interval_at(Instant::now() + DELAY, DELAY);
+                }
+            }
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -92,6 +124,9 @@ impl RegisterClient for RegisterClientState {
 
         let channel = self.processes_txs.get(&target).expect("No such process");
         channel.send((*cmd).clone()).await.expect("Failed to pass the message to sender task");
+
+        let retransmission_channel = self.retransmission_txs.get(&target).expect("No such process");
+        retransmission_channel.send((*cmd).clone()).await.expect("Failed to pass the message to retransmission task");
     }
 
     async fn broadcast(&self, msg: Broadcast) {
@@ -100,6 +135,9 @@ impl RegisterClient for RegisterClientState {
         for target in 1..=self.processes_count {
             let channel = self.processes_txs.get(&target).expect("No such process");
             channel.send((*cmd).clone()).await.expect("Failed to pass the message to sender task");
+
+            let retransmission_channel = self.retransmission_txs.get(&target).expect("No such process");
+            retransmission_channel.send((*cmd).clone()).await.expect("Failed to pass the message to retransmission task");
         }
     }
 }
