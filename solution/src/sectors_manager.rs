@@ -96,7 +96,7 @@ impl SectorsManager for SectorsManagerState {
         // and so we will return the default value of SectorVec.
         // Using lock to ensure exclusive access to the HashMap.
         let file_path = {
-            let access = self.data_access.lock().unwrap();
+            let access = self.data_access.lock().expect("Failed to lock data access");
             if let Some(&(ts, wr)) = access.get(&idx) {
                 Some(self.sectoridx_file_path(idx, ts, wr))
             } else {
@@ -120,7 +120,7 @@ impl SectorsManager for SectorsManagerState {
     async fn read_metadata(&self, idx: SectorIdx) -> (u64, u8) {
         // Recover metadata from the HashMap.
         // Lock for the exclusive access, so nobody overrides the data.
-        let access = self.data_access.lock().unwrap();
+        let access = self.data_access.lock().expect("Failed to lock data access");
         *access.get(&idx).unwrap_or(&(0, 0))
     }
 
@@ -148,14 +148,14 @@ impl SectorsManager for SectorsManagerState {
 
         // Recover old metadata from the HashMap to delete the old data later.
         let (old_ts, old_wr) = {
-            let access = self.data_access.lock().unwrap();
+            let access = self.data_access.lock().expect("Failed to lock data access");
             access.get(&idx).cloned().unwrap_or((0, 0))
         };
 
         // At this point the file with new data and old data (if it existed) are both saved.
         // Now we can update metadata that new data is saved for the SectorIdx.
         {
-            let mut access = self.data_access.lock().unwrap();
+            let mut access = self.data_access.lock().expect("Failed to lock data access");
             access.insert(idx, (*ts, *wr));
         }
 

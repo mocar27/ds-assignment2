@@ -86,13 +86,13 @@ impl RegisterClientState {
         // Spawn task that will handle sending messages to other processes.
         stream.set_nodelay(true).expect("Failed to set nodelay");
 
-        tokio::spawn(async move {
-            loop {
-                let msg = rx.recv().await.unwrap();
-                let serialized_msg = serialize_register_command(&msg);
-                stream.write_all(&serialized_msg).await.expect("Failed to write to stream");
-            }
-        });
+        // tokio::spawn(async move {
+        //     loop {
+        //         let msg = rx.recv().await.unwrap();
+        //         let serialized_msg = serialize_register_command(&msg);
+        //         stream.write_all(&serialized_msg).await.expect("Failed to write to stream");
+        //     }
+        // });
 
         // Spawn task that will handle receiving messages from other processes.
         tokio::spawn(async move {

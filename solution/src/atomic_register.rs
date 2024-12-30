@@ -114,7 +114,8 @@ impl AtomicRegister for AtomicRegisterState {
         >,
     ) {
         // Generated op_id and callback to be called later after the client command is completed.
-        self.op_id = Some(Uuid::new_v4());
+        let o_id = Uuid::new_v4();
+        self.op_id = Some(o_id.clone());
         self.callback = Some(success_callback);
         self.rid = Some(cmd.header.request_identifier);
 
@@ -141,7 +142,7 @@ impl AtomicRegister for AtomicRegisterState {
         // Message to be sent construction
         let header = SystemCommandHeader {
             process_identifier: self.self_ident,
-            msg_ident: self.op_id.unwrap(),
+            msg_ident: o_id,
             sector_idx: sidx,
         };
         let content = SystemRegisterCommandContent::ReadProc;
