@@ -35,33 +35,32 @@ pub async fn run_register_process(config: Configuration) {
     // Channel for sending messages to self, so we are skipping serialization, deserialization, TCP, etc.
     let (self_tx, self_rx) = unbounded::<SystemRegisterCommand>();
     
-    let register_client = RegisterClientState::new(
+    let register_client = Arc::new(RegisterClientState::new(
         self_rank.clone(),
         hmac_system_key.clone(),
         self_tx,
         tcp_locations.len() as u8,
         tcp_locations.clone()
-    ).await;
-    
-    let self_handler = tokio::spawn(handle_self_messages(self_rx));
-    
+    ).await);
+        
     // Create sectors manager that will operate on that directory.
     let sectors_manager = build_sectors_manager(storage_dir.clone()).await;
-    
-    let register_process = RegisterProcessState::new(
+
+    let register_process = Arc::new(RegisterProcessState::new(
         self_rank.clone(),
         hmac_system_key.clone(),
         hmac_client_key.clone(),
         tcp_locations.len() as u8,
         n_sectors.clone(),
-        storage_dir.clone()
-    ).await;
+        register_client.clone(),
+        sectors_manager.clone(),
+    ).await);
+
+    let self_handler = tokio::spawn(handle_self_messages(self_rx, register_process.clone()));
 
     let connections_handler = tokio::spawn(accept_connections(
         listener,
-        Arc::new(register_process),
-        Arc::new(register_client),
-        sectors_manager,
+        register_process.clone(),
     ));
 
     connections_handler.await.expect("Connections handler failed");

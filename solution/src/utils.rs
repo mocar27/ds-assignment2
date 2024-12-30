@@ -1,6 +1,16 @@
 // Common utilities shared across the files
 use std::io::{Error, ErrorKind};
+use std::future::Future;
+use std::pin::Pin;
 use std::fmt;
+
+use crate::domain::OperationSuccess;
+
+pub type Callback = Box<
+dyn FnOnce(OperationSuccess) -> Pin<Box<dyn Future<Output = ()> + Send>>
+    + Send
+    + Sync,
+>;
 
 #[derive(Debug)]
 pub enum SerializationError {
