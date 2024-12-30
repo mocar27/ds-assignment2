@@ -13,26 +13,22 @@
 // Retransmission will continue until the receiver acknowledges that process has recovered.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use async_channel::{Receiver, Sender, unbounded};
 use tokio::net::TcpStream;
+use tokio::net::tcp::OwnedWriteHalf;
+use tokio::time::Duration;
 
-use crate::{SectorIdx, RegisterClient, SystemRegisterCommand,
-    Send, Broadcast, serialize_register_command};
-
+use crate::{RegisterCommand, SystemRegisterCommand,
+    RegisterClient, Send, Broadcast, serialize_register_command};
 
 pub struct RegisterClientState {
-    // Metadata needed to send TCP commands to other processes.
-    hmac_system_key: [u8; 64],
+    // Data needed for broadcasting and creating connections.
     processes_count: u8,
 
     // Channel for giving the information to task handlers that we want to send a message to some process.
     // Later the task will consume the message on the channel and send it to the target process.
     // This way we don't pass the sending socket to every task handler in the system.
     processes_txs: HashMap<u8, Sender<SystemRegisterCommand>>,
-
-    // Channel inside which we put messages that potentially would need to be retransmitted.
-    retransmission_messages_tx: Sender<Box<SystemRegisterCommand>>,
 }
 
 impl RegisterClientState {
@@ -47,72 +43,45 @@ impl RegisterClientState {
         let mut processes_txs = HashMap::new();
         processes_txs.insert(self_ident, self_tx);
 
-        let (retransmission_messages_tx, retransmission_messages_rx) = unbounded();
 
+        // After 300 ms all processes should have called bind and already be listening.
+        tokio::time::sleep(Duration::from_millis(300)).await;
         for i in 0..processes_count {
             // Adress of each process is under tcp_locations[i - 1]
-            // Create a connection to every other process in the system.
+            // Create a connection to every other process in the system (except self_ident address).
             if i != self_ident - 1 {
                 let addr = &tcp_locations[i as usize];
                 let stream = TcpStream::connect(addr).await.expect("Failed to connect to process");
-                let (tx, rx) = unbounded();
-                
-                processes_txs.insert(i + 1, tx);
+                stream.set_nodelay(true).expect("Failed to set nodelay");
 
-                tokio::spawn(Self::handle_connection(stream, rx));
+                let (connection_tx, connection_rx) = unbounded::<SystemRegisterCommand>();
+                
+                let process_ident = i + 1;
+                processes_txs.insert(process_ident.clone(), connection_tx);
+
+                let (_, writer) = stream.into_split();
+                tokio::spawn(Self::handle_writing(hmac_system_key, writer, connection_rx));
             }
         }
-
-        // Spawn task that will handle retransmissions.
-        tokio::spawn(async move {
-            loop {
-                let msg = retransmission_messages_rx.recv().await.unwrap();
-                // Handle retransmission
-            }
-        });
 
         RegisterClientState {
-            hmac_system_key,
             processes_count,
             processes_txs,
-            retransmission_messages_tx,
         }
     }
 
-    // Function that will handle connection with other processes.
-    // It will be responsible for sending messages to other processes.
-    // It will also be responsible for receiving messages from other processes.
-    async fn handle_connection(stream: TcpStream, rx: Receiver<SystemRegisterCommand>) {
-        // Spawn task that will handle sending messages to other processes.
-        stream.set_nodelay(true).expect("Failed to set nodelay");
-
-        // tokio::spawn(async move {
-        //     loop {
-        //         let msg = rx.recv().await.unwrap();
-        //         let serialized_msg = serialize_register_command(&msg);
-        //         stream.write_all(&serialized_msg).await.expect("Failed to write to stream");
-        //     }
-        // });
-
-        // Spawn task that will handle receiving messages from other processes.
-        tokio::spawn(async move {
-            loop {
-                // Read message from stream
-                // Deserialize message
-                // Pass message to self_tx
-            }
-        });
+    async fn handle_writing(
+        hmac_system_key: [u8; 64],
+        mut writer: OwnedWriteHalf, 
+        rx: Receiver<SystemRegisterCommand>,
+    ) {
+        // Since only this task owns permission to write to the stream, if something was received 
+        // on the channel that we want to send, call serialize_register_command and write to the stream.
+        while let Ok(msg) = rx.recv().await {
+            let cmd = RegisterCommand::System(msg);
+            let _ = serialize_register_command(&cmd, &mut writer, &hmac_system_key).await;
+        }
     }
-
-    // For receiving messages will be responsible other spawned task.
-    // function to handle receiving messages from other processes and another one for retransmissions receiving
-    // For example 500 ms is reasonable (for retransmissions).
-    // potentially move retransmission_txs to another function and tokio task that will work for given u8
-
-    // We cannot lose any messages, even when a target process crashes and the TCP connection gets broken.
-    // If we don't get acknowledgement that process has received the message (after 500 ms) we will begin retransmissions every 500 ms.
-    // If we get on the receiver that process has recovered, we can stop retransmissions.
-    // Channel for inserting messages that potentially would need to be retransmitted is defined in self.
 }
 
 #[async_trait::async_trait]
