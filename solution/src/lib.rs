@@ -47,10 +47,6 @@ pub async fn run_register_process(config: Configuration) {
     
     // Create sectors manager that will operate on that directory.
     let sectors_manager = build_sectors_manager(storage_dir.clone()).await;
-
-
-
-
     
     let register_process = RegisterProcessState::new(
         self_rank.clone(),
