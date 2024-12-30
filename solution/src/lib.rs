@@ -6,10 +6,11 @@ mod sectors_manager;
 mod transfer_operations;
 mod utils;
 
-use register_process::handle_self_messages;
+use crate::register_process::{RegisterProcessState, handle_self_messages, accept_connections};
+use crate::register_client::RegisterClientState;
 use tokio::net::TcpListener;
 use async_channel::unbounded;
-use crate::register_client::RegisterClientState;
+use std::sync::Arc;
 
 pub use crate::domain::*;
 pub use atomic_register_public::*;
@@ -18,36 +19,53 @@ pub use sectors_manager_public::*;
 pub use transfer_public::*;
 
 pub async fn run_register_process(config: Configuration) {
+    let hmac_system_key = config.hmac_system_key;
+    let hmac_client_key = config.hmac_client_key;
+    let storage_dir = config.public.storage_dir.clone();
+    let tcp_locations = config.public.tcp_locations.clone();
+    let self_rank = config.public.self_rank;
+    let n_sectors = config.public.n_sectors;
+
     // Bind the listener to the address first, as told to in the task.
-    let addr = config.public.tcp_locations.get(config.public.self_rank as usize - 1)
+    let addr = tcp_locations.get(self_rank as usize - 1)
         .expect("Self rank is out of tcp_locations vector bounds")
         .clone();
-
     let listener = TcpListener::bind(addr).await.expect("Failed to bind to address");
-
-    // Create sectors manager that will operate on that directory.
-    let sectors_manager = build_sectors_manager(config.public.storage_dir).await;
 
     // Channel for sending messages to self, so we are skipping serialization, deserialization, TCP, etc.
     let (self_tx, self_rx) = unbounded::<SystemRegisterCommand>();
-
-    let register_client = RegisterClientState::new(
-            config.public.self_rank,
-            config.hmac_system_key,
-            self_tx,
-            config.public.tcp_locations.len() as u8,
-            config.public.tcp_locations
-        ).await;
-
-    let self_handler = tokio::spawn(handle_self_messages(self_rx));
-        
-    // let (stream, _) = listener.accept().await.expect("Failed to accept connection");
-
-
-
     
+    let register_client = RegisterClientState::new(
+        self_rank.clone(),
+        hmac_system_key.clone(),
+        self_tx,
+        tcp_locations.len() as u8,
+        tcp_locations.clone()
+    ).await;
+    
+    let self_handler = tokio::spawn(handle_self_messages(self_rx));
+    
+    // Create sectors manager that will operate on that directory.
+    let sectors_manager = build_sectors_manager(storage_dir.clone()).await;
+
+    let register_process = RegisterProcessState::new(
+        self_rank.clone(),
+        hmac_system_key.clone(),
+        hmac_client_key.clone(),
+        tcp_locations.len() as u8,
+        n_sectors.clone(),
+        storage_dir.clone()
+    ).await;
+
+    let connections_handler = tokio::spawn(accept_connections(
+        listener,
+        Arc::new(register_process),
+        Arc::new(register_client),
+        sectors_manager,
+    ));
+
+    connections_handler.await.expect("Connections handler failed");
     self_handler.await.expect("Self handler failed");
-    // Here (register_process) tokio handles the communication with each of the linux processes.
 }
 
 pub mod atomic_register_public {

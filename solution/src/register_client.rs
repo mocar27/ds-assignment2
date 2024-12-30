@@ -17,21 +17,19 @@ use std::sync::Arc;
 use async_channel::{Receiver, Sender, unbounded};
 use tokio::net::TcpStream;
 
-use crate::{SectorIdx, RegisterClient, RegisterCommand, SystemRegisterCommand,
+use crate::{SectorIdx, RegisterClient, SystemRegisterCommand,
     Send, Broadcast, serialize_register_command};
 
 
 pub struct RegisterClientState {
-    // Metadata needed to communicate with other processes.
-    self_ident: u8,
+    // Metadata needed to send TCP commands to other processes.
     hmac_system_key: [u8; 64],
     processes_count: u8,
 
-    // As messages to itself should skip TCP, we will insert them to internal channel.
-    self_tx: Sender<SystemRegisterCommand>,
-
-    // Channel for sending messages to other processes.
-    // processes_txs: Vec<Sender<Box<SystemRegisterCommand>>>,
+    // Channel for giving the information to task handlers that we want to send a message to some process.
+    // Later the task will consume the message on the channel and send it to the target process.
+    // This way we don't pass the sending socket to every task handler in the system.
+    processes_txs: HashMap<u8, Sender<SystemRegisterCommand>>,
 
     // Channel inside which we put messages that potentially would need to be retransmitted.
     retransmission_messages_tx: Sender<Box<SystemRegisterCommand>>,
@@ -45,10 +43,24 @@ impl RegisterClientState {
         processes_count: u8,
         tcp_locations: Vec<(String, u16)>,
     ) -> Self {
+        // Map of processes' identifiers to their sending channels (so that connection handlers know when to write).
+        let mut processes_txs = HashMap::new();
+        processes_txs.insert(self_ident, self_tx);
+
         let (retransmission_messages_tx, retransmission_messages_rx) = unbounded();
 
         for i in 0..processes_count {
-            
+            // Adress of each process is under tcp_locations[i - 1]
+            // Create a connection to every other process in the system.
+            if i != self_ident - 1 {
+                let addr = &tcp_locations[i as usize];
+                let stream = TcpStream::connect(addr).await.expect("Failed to connect to process");
+                let (tx, rx) = unbounded();
+                
+                processes_txs.insert(i + 1, tx);
+
+                tokio::spawn(Self::handle_connection(stream, rx));
+            }
         }
 
         // Spawn task that will handle retransmissions.
@@ -59,20 +71,39 @@ impl RegisterClientState {
             }
         });
 
-        // Host and port, indexed by identifiers, of every process, including itself
-        // (subtract 1 from self_rank to obtain index in this array).
-        // You can assume that `tcp_locations.len() < 255`.
-        // pub tcp_locations: Vec<(String, u16)>,
-
         RegisterClientState {
-            self_ident,
             hmac_system_key,
             processes_count,
-            self_tx,
-            // processes_txs,
+            processes_txs,
             retransmission_messages_tx,
         }
     }
+
+    // Function that will handle connection with other processes.
+    // It will be responsible for sending messages to other processes.
+    // It will also be responsible for receiving messages from other processes.
+    async fn handle_connection(stream: TcpStream, rx: Receiver<SystemRegisterCommand>) {
+        // Spawn task that will handle sending messages to other processes.
+        stream.set_nodelay(true).expect("Failed to set nodelay");
+
+        tokio::spawn(async move {
+            loop {
+                let msg = rx.recv().await.unwrap();
+                let serialized_msg = serialize_register_command(&msg);
+                stream.write_all(&serialized_msg).await.expect("Failed to write to stream");
+            }
+        });
+
+        // Spawn task that will handle receiving messages from other processes.
+        tokio::spawn(async move {
+            loop {
+                // Read message from stream
+                // Deserialize message
+                // Pass message to self_tx
+            }
+        });
+    }
+
     // For receiving messages will be responsible other spawned task.
     // function to handle receiving messages from other processes and another one for retransmissions receiving
     // For example 500 ms is reasonable (for retransmissions).
@@ -87,12 +118,19 @@ impl RegisterClientState {
 #[async_trait::async_trait]
 impl RegisterClient for RegisterClientState {
     async fn send(&self, msg: Send) {
-        // 1. Messages sent by a process to itself should skip TCP, serialization, deserialization, 
-        // HMAC preparation and validation phases to improve the performance
-        unimplemented!()
+        let target = msg.target;
+        let cmd = msg.cmd;
+
+        let channel = self.processes_txs.get(&target).expect("No such process");
+        channel.send((*cmd).clone()).await.expect("Failed to pass the message to sender task");
     }
 
     async fn broadcast(&self, msg: Broadcast) {
-        unimplemented!()
+        let cmd = msg.cmd;
+
+        for target in 1..=self.processes_count {
+            let channel = self.processes_txs.get(&target).expect("No such process");
+            channel.send((*cmd).clone()).await.expect("Failed to pass the message to sender task");
+        }
     }
 }

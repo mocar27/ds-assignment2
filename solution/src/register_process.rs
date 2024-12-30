@@ -1,9 +1,3 @@
-// Register process jest po to, ze jak masz te funkcje w lib.rs run_register_process, 
-// to pewnie chcialbys miec jakis stan/zmienne/cos i ta funkcja moze urosnac porzadnie, 
-// wiec ja to sobie podzielilem na structa, wiec robie cos typu
-// let rp = RegisterProcess::new(…);
-// rp.run().await()
-
 // Handling messages from processes and from myself.
 
 use std::future::Future;
@@ -25,6 +19,7 @@ use crate::{AtomicRegister, atomic_register::AtomicRegisterState, build_atomic_r
     RegisterClient, SectorsManager,
     serialize_register_command, deserialize_register_command};
 
+#[derive(Debug, Clone)]
 pub struct RegisterProcessState {
     self_ident: u8,
     hmac_system_key: [u8; 64],
@@ -55,5 +50,16 @@ impl RegisterProcessState {
 }
 
 pub async fn handle_self_messages(self_rx: Receiver<SystemRegisterCommand>) {
+    unimplemented!()
+}
+
+pub async fn accept_connections(
+    listener: tokio::net::TcpListener,
+    register_process: Arc<RegisterProcessState>,
+    register_client: Arc<dyn RegisterClient>,
+    sectors_manager: Arc<dyn SectorsManager>,
+) {
+    // let (stream, _) = listener.accept().await.expect("Failed to accept connection");
+    // Here (register_process) tokio handles the communication with each of the linux processes.
     unimplemented!()
 }
