@@ -102,6 +102,7 @@ impl RegisterClientState {
 
         loop {
             tokio::select! {
+                biased;
                 _ = interval.tick() => {
                     if let Some(command) = &cmd {
                         connection_tx.send(command.clone()).await.expect("Failed to send retransmission message");
