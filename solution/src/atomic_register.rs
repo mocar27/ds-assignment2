@@ -70,8 +70,6 @@ impl AtomicRegisterState {
         wr: u8,
         val: SectorVec,
     ) -> Self {
-        sectors_manager.write(sector_idx, &(val.clone(), ts.clone(), wr.clone())).await;
-
         AtomicRegisterState {
             self_ident,
             sector_idx,
@@ -114,8 +112,7 @@ impl AtomicRegister for AtomicRegisterState {
         >,
     ) {
         // Generated op_id and callback to be called later after the client command is completed.
-        let o_id = Uuid::new_v4();
-        self.op_id = Some(o_id.clone());
+        self.op_id = Some(Uuid::new_v4());
         self.callback = Some(success_callback);
         self.rid = Some(cmd.header.request_identifier);
 
@@ -142,7 +139,7 @@ impl AtomicRegister for AtomicRegisterState {
         // Message to be sent construction
         let header = SystemCommandHeader {
             process_identifier: self.self_ident,
-            msg_ident: o_id,
+            msg_ident: self.op_id.unwrap(),
             sector_idx: sidx,
         };
         let content = SystemRegisterCommandContent::ReadProc;
@@ -197,7 +194,7 @@ impl AtomicRegister for AtomicRegisterState {
 
                     if (self.readlist.len() > (self.processes_count as usize) / 2) && (self.reading || self.writing) {
                         self.readlist.insert(self.self_ident, (self.ts, self.wr, self.val.clone()));
-
+                        
                         // Highest(*) returns the largest value ordered lexicographically by (timestamp, rank)
                         let (maxts, rr, readval) = self.readlist.iter().max_by(|a, b| 
                             a.1.1.cmp(&b.1.1)).map(|(_, v)| v).unwrap().clone();
@@ -206,7 +203,7 @@ impl AtomicRegister for AtomicRegisterState {
                         self.readlist.clear();
                         self.acklist.clear();
                         self.write_phase = true;
-                        
+
                         // Message to be sent construction
                         let header = SystemCommandHeader {
                             process_identifier: self.self_ident,
@@ -238,7 +235,6 @@ impl AtomicRegister for AtomicRegisterState {
                             header,
                             content,
                         };
-
                         self.register_client.broadcast(RegisterClientBroadcast { cmd: system_cmd.into() }).await;
                     }
                 }
@@ -275,14 +271,14 @@ impl AtomicRegister for AtomicRegisterState {
             SystemRegisterCommandContent::Ack => {
                 let q = cmd.header.process_identifier;
                 let id = cmd.header.msg_ident;
-
+                
                 if id == self.op_id.unwrap() && self.write_phase {
                     self.acklist.insert(q);
-
+                    
                     if (self.acklist.len() > (self.processes_count as usize) / 2) && (self.reading || self.writing) {
                         self.acklist.clear();
                         self.write_phase = false;
-
+                        
                         // After the command is completed, we expect callback to be called.
                         // The request_identifier is the number of request that was provided 
                         // at the beginning by the ClientRegisterCommand header alongside the callback function.

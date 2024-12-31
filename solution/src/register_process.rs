@@ -8,13 +8,13 @@ use async_channel::{Sender, Receiver, unbounded};
 use hmac::{Mac, Hmac};
 use sha2::Sha256;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
 type HmacSha256 = Hmac<Sha256>;
 
 use crate::{build_atomic_register, SectorIdx, StatusCode,
     RegisterCommand, OperationReturn, OperationSuccess, ReadReturn, 
-    ClientRegisterCommand, ClientRegisterCommandContent, SystemRegisterCommand, 
+    ClientRegisterCommand, ClientRegisterCommandContent, SystemRegisterCommand,
     RegisterClient, SectorsManager, utils::Callback, MAGIC_NUMBER,
     deserialize_register_command};
 
@@ -25,6 +25,7 @@ pub struct RegisterProcessState {
     n_sectors: u64,
 
     sectors_txs: HashMap<SectorIdx, Sender<(RegisterCommand, Option<Callback>)>>,
+    sectors_guards: HashMap<SectorIdx, Arc<Semaphore>>,
 }
 
 impl RegisterProcessState {
@@ -45,11 +46,17 @@ impl RegisterProcessState {
             tokio::spawn(run_ar_worker(rx, self_ident, i, register_client.clone(), sectors_manager.clone(), processes_count.clone()));
         }
 
+        let mut sectors_guards: HashMap<SectorIdx, Arc<Semaphore>> = HashMap::new();
+        for i in 0..n_sectors {
+            sectors_guards.insert(i, Arc::new(Semaphore::new(1)));
+        }
+
         RegisterProcessState {
             hmac_system_key,
             hmac_client_key,
             n_sectors,
             sectors_txs,
+            sectors_guards,
         }
     }
 }
@@ -94,47 +101,64 @@ pub async fn accept_connections(
 ) {
     loop {
         let (stream, _) = listener.accept().await.expect("Failed to accept connection");
+        stream.set_nodelay(true).expect("Failed to set nodelay");
         let rp = register_process.clone();
+
         tokio::spawn( async move {
             let (mut reader, writer) = stream.into_split();
             let writer_access = Arc::new(Mutex::new(writer));
 
-            let (cmd, hmac_ok) = deserialize_register_command(&mut reader, &rp.hmac_system_key, &rp.hmac_client_key)
-            .await.expect("Failed to deserialize command");
+            loop {
+                let (cmd, hmac_ok) = deserialize_register_command(&mut reader, &rp.hmac_system_key, &rp.hmac_client_key)
+                .await.expect("Failed to deserialize command");
 
-            if hmac_ok {
-                let sector_idx = match &cmd {
-                    RegisterCommand::Client(ClientRegisterCommand { header, .. }) => Some(header.sector_idx),
-                    RegisterCommand::System(SystemRegisterCommand { .. }) => None,
-                };
-                // Valid Hmac and sector index, parse the message and get the callback, to later send the response.
-                if sector_idx < Some(rp.n_sectors) {
-                    let worker_tx = rp.sectors_txs.get(sector_idx.as_ref().unwrap()).expect("Sector handler not found");
+                if hmac_ok {
+                    match cmd {
+                        RegisterCommand::Client(ClientRegisterCommand { header, .. }) => {
+                            let sector_idx = header.sector_idx;
+                            // Valid Hmac and sector index, parse the message and get the callback, to later send the response.
+                            if sector_idx < rp.n_sectors {
+                                let worker_tx = rp.sectors_txs.get(&sector_idx).expect("Sector handler not found");
 
-                   let callback = get_success_callback(cmd.clone(), rp.clone(), writer_access.clone());
+                                // However, there can be multiple clients, and different clients can each send a command with the same sector index at the same time.
+                                // We need to take cover of that, so we don't get mixed and messed up while processing the message (I got messed up).
+                                let sector_guard = rp.sectors_guards.get(&sector_idx).expect("Sector mutex not found");
+                                let guard = sector_guard.clone().acquire_owned().await.expect("Failed to acquire semaphore");
 
-                    worker_tx.send((cmd, Some(callback))).await.expect("Failed to send message to sector");
+                                let callback = get_success_callback(cmd.clone(), rp.clone(), writer_access.clone(), guard);
+                                // semafor per sektor
+                                worker_tx.send((cmd, Some(callback))).await.expect("Failed to send message to sector");
+                            }
+                            // Receiver message with invalid sector index
+                            else {
+                                // Invalid sector index, send response with InvalidSectorIndex status
+                                let (rid, msg_type) = get_rid_and_msg_type(cmd);
+
+                                let resp = construct_invalid_sector_index_response(&rp.hmac_client_key, msg_type, rid)
+                                .await.expect("Failed to construct response");
+
+                                send_response(resp, writer_access.clone()).await;
+                            }
+                        },
+                        RegisterCommand::System(SystemRegisterCommand { header, .. })=> {
+                            let sidx = header.sector_idx;
+                            let tx = rp.sectors_txs.get(&sidx).expect("Sector handler not found");
+                            tx.send((cmd, None)).await.expect("Failed to send message to sector");
+                        },
+                    }
                 }
-                // Receiver message with invalid sector index
+                // Receiver message with invalid HMAC
                 else {
-                    // Invalid sector index, send response with InvalidSectorIndex status
-                    let (rid, msg_type) = get_rid_and_msg_type(cmd);
+                        if let RegisterCommand::Client(..) = cmd {
+                        // Invalid HMac, send response with AuthFailure status
+                        let (rid, msg_type) = get_rid_and_msg_type(cmd);
 
-                    let resp = construct_invalid_sector_index_response(&rp.hmac_client_key, msg_type.unwrap(), rid.unwrap())
-                    .await.expect("Failed to construct response");
+                        let resp = construct_invalid_hmac_response(&rp.hmac_client_key, msg_type, rid)
+                        .await.expect("Failed to construct response");
 
-                    send_response(resp, writer_access).await;
+                        send_response(resp, writer_access.clone()).await;
+                    }
                 }
-            }
-            // Receiver message with invalid HMAC
-            else {
-                // Invalid HMac, send response with AuthFailure status
-                let (rid, msg_type) = get_rid_and_msg_type(cmd);
-
-                let resp = construct_invalid_hmac_response(&rp.hmac_client_key, msg_type.unwrap(), rid.unwrap())
-                .await.expect("Failed to construct response");
-
-                send_response(resp, writer_access).await;
             }
         });
     }
@@ -145,13 +169,16 @@ pub fn get_success_callback(
     cmd: RegisterCommand,
     register_process: Arc<RegisterProcessState>,
     writer: Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>,
+    guard: OwnedSemaphorePermit,
 ) -> Callback {
     Box::new(move |op_success: OperationSuccess| Box::pin(async move {
         let (rid, msg_type) = get_rid_and_msg_type(cmd.clone());
 
         let response = construct_valid_response(
-            op_success, &register_process.hmac_client_key, msg_type.unwrap(), rid.unwrap()).await;
+            op_success, &register_process.hmac_client_key, msg_type, rid).await;
+            
         let _ = send_response(response.unwrap(), writer).await;
+        drop(guard);
     }))
 }
 
@@ -232,14 +259,16 @@ pub async fn send_response(
     writer.write_all(&reponse).await.expect("Failed to write response");
 }
 
-pub fn get_rid_and_msg_type(cmd: RegisterCommand) -> (Option<u64>, Option<u8>) {
+pub fn get_rid_and_msg_type(cmd: RegisterCommand) -> (u64, u8) {
     match cmd {
         RegisterCommand::Client(ClientRegisterCommand { header, content }) => {
             match content {
-                ClientRegisterCommandContent::Read => (Some(header.request_identifier), Some(0x01)),
-                ClientRegisterCommandContent::Write { .. } => (Some(header.request_identifier), Some(0x02)),
+                ClientRegisterCommandContent::Read => (header.request_identifier, 0x01),
+                ClientRegisterCommandContent::Write { .. } => (header.request_identifier, 0x02),
             }
         },
-        RegisterCommand::System(..) => (None, None),
+        RegisterCommand::System(..) => {
+            panic!("System command should not be handled here");
+        },
     }
 }

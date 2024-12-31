@@ -4,9 +4,13 @@ debug/
 target/
 public-tests/target/
 public-tests/debug/
+public-tests/tests/reconnect.rs
 solution/target/
 solution/debug/
 test-utils/target/
 test-utils/debug/
 notes.txt
 skeleton_register_clients.rs
+reconnect.sh
+simple_config
+test-utils/reconnect.rs

@@ -30,7 +30,7 @@ impl SectorsManagerState {
             Ok(dir) => dir,
             Err(_) => {
                 create_dir_all(&path).await.expect("Failed to create storage directory");
-                read_dir(&path).await.expect("Failed to read storage directory")
+                read_dir(&path).await.expect("Failed to read storage directory after creation")
             }
         };
 
@@ -43,7 +43,11 @@ impl SectorsManagerState {
     }
 
     fn sectoridx_file_path(&self, idx: SectorIdx, ts: u64, wr: u8) -> PathBuf {
-        self.path.join(format!("{}_{}_{}", idx, ts, wr))
+        self.path.as_path().join(format!("{}_{}_{}", idx, ts, wr))
+    }
+
+    fn sectoridx_tmp_file_path(&self, idx: SectorIdx, ts: u64, wr: u8) -> PathBuf {
+        self.path.as_path().join(format!("tmp_{}_{}_{}", idx, ts, wr))
     }
 
     async fn sectors_crash_recovery(path: &PathBuf, mut dir: ReadDir) -> HashMap<SectorIdx, (u64, u8)> {
@@ -108,9 +112,10 @@ impl SectorsManager for SectorsManagerState {
         // else we will return the default value of the SectorVec.
         match file_path {
             Some(file_path) => {
-                let mut file = File::open(file_path).await.expect("Failed to open sector file");
                 let mut data = vec![0u8; 4096];
+                let mut file = File::open(file_path).await.expect("Failed to open sector file");
                 file.read_exact(&mut data).await.expect("Failed to read sector data");
+                drop(file);
                 SectorVec(data)
             },
             None => SectorVec(vec![0u8; 4096])
@@ -132,20 +137,26 @@ impl SectorsManager for SectorsManagerState {
         // Setup new data to be written for the SectorIdx.
         let (data, ts, wr) = sector;
         let file_path = self.sectoridx_file_path(idx, *ts, *wr);
-        let tmp_file_path = self.path.join("tmp_").join(&file_path);
+        let tmp_file_path = self.sectoridx_tmp_file_path(idx, *ts, *wr);
 
         // Write all the data to the temporary file.
-        let mut tmp_file = File::create(&tmp_file_path).await.expect("Failed to create temporary sector file");
+        let mut tmp_file = File::create(&tmp_file_path).await.unwrap();
         tmp_file.write_all(&data.0).await.expect("Failed to write sector data to temporary file");
         tmp_file.sync_data().await.expect("Failed to sync temporary sector file");
-
+        
+        // Close the file as soon as possible.
+        drop(tmp_file);
+        
         // Create file with new metadata and data inside the file and save it.
         // The temporary file will be remaned to the destination file, 
         // so we do not use additional memory. After that perform a sync on the data.
         rename(tmp_file_path, &file_path).await.expect("Failed to rename temporary sector file");
         let dest = File::open(&file_path).await.expect("Failed to open sector file");
         dest.sync_data().await.expect("Failed to sync sector file");
-
+        
+        // Close the file as soon as possible.
+        drop(dest);
+        
         // Recover old metadata from the HashMap to delete the old data later.
         let (old_ts, old_wr) = {
             let access = self.data_access.lock().expect("Failed to lock data access");
