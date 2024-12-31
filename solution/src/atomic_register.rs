@@ -191,7 +191,7 @@ impl AtomicRegister for AtomicRegisterState {
 
                 if id == self.op_id.unwrap() && !self.write_phase {
                     self.readlist.insert(q, (timestamp, write_rank, sector_data));
-
+                    
                     if (self.readlist.len() > (self.processes_count as usize) / 2) && (self.reading || self.writing) {
                         self.readlist.insert(self.self_ident, (self.ts, self.wr, self.val.clone()));
                         

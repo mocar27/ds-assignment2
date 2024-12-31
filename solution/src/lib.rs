@@ -30,7 +30,7 @@ pub async fn run_register_process(config: Configuration) {
     let addr = tcp_locations.get(self_rank as usize - 1)
         .expect("Self rank is out of tcp_locations vector bounds")
         .clone();
-    let listener = TcpListener::bind(addr).await.expect("Failed to bind to address");
+    let listener = TcpListener::bind(addr.clone()).await.expect("Failed to bind to address");
 
     // Channel for sending messages to self, so we are skipping serialization, deserialization, TCP, etc.
     let (self_tx, self_rx) = unbounded::<SystemRegisterCommand>();

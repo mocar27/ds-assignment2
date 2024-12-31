@@ -53,6 +53,7 @@ impl RegisterClientState {
         // After 300 ms all processes should have called bind and already be listening.
         tokio::time::sleep(Duration::from_millis(300)).await;
         for i in 0..processes_count {
+
             // Adress of each process is under tcp_locations[i - 1]
             // Create a connection to every other process in the system (except self_ident address).
             if i != self_ident - 1 {

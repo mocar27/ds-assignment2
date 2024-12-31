@@ -298,8 +298,8 @@ async fn serialize_system_rc(
             buff.write_all(&ts).await?;
 
             let wr = write_rank.to_be_bytes();
-            buff.write_all(&wr).await?;
-
+            buff.write_all(&[0, 0, 0, 0, 0, 0, 0, wr[0]]).await?;
+            
             buff.write_all(&sector_data.0).await?;
         },
         SystemRegisterCommandContent::WriteProc { timestamp, write_rank, data_to_write } => {
@@ -307,7 +307,8 @@ async fn serialize_system_rc(
             buff.write_all(&ts).await?;
 
             let wr = write_rank.to_be_bytes();
-            buff.write_all(&wr).await?;
+            buff.write_all(&[0, 0, 0, 0, 0, 0, 0, wr[0]]).await?;
+
 
             buff.write_all(&data_to_write.0).await?;
         },

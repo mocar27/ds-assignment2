@@ -1,4 +1,5 @@
-// Handling messages from processes and from myself.
+// Handling incoming messages from other processes, client and myself.
+// The main function is accept_connections, which is called by the main function in lib.rs
 
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -100,14 +101,15 @@ pub async fn accept_connections(
     register_process: Arc<RegisterProcessState>,
 ) {
     loop {
+        // Accept the connection and split the stream into reader and writer.
         let (stream, _) = listener.accept().await.expect("Failed to accept connection");
         stream.set_nodelay(true).expect("Failed to set nodelay");
+        let (mut reader, writer) = stream.into_split();
+        let writer_access = Arc::new(Mutex::new(writer));
+        
         let rp = register_process.clone();
 
         tokio::spawn( async move {
-            let (mut reader, writer) = stream.into_split();
-            let writer_access = Arc::new(Mutex::new(writer));
-
             loop {
                 let (cmd, hmac_ok) = deserialize_register_command(&mut reader, &rp.hmac_system_key, &rp.hmac_client_key)
                 .await.expect("Failed to deserialize command");
@@ -116,6 +118,7 @@ pub async fn accept_connections(
                     match cmd {
                         RegisterCommand::Client(ClientRegisterCommand { header, .. }) => {
                             let sector_idx = header.sector_idx;
+
                             // Valid Hmac and sector index, parse the message and get the callback, to later send the response.
                             if sector_idx < rp.n_sectors {
                                 let worker_tx = rp.sectors_txs.get(&sector_idx).expect("Sector handler not found");
@@ -125,8 +128,8 @@ pub async fn accept_connections(
                                 let sector_guard = rp.sectors_guards.get(&sector_idx).expect("Sector mutex not found");
                                 let guard = sector_guard.clone().acquire_owned().await.expect("Failed to acquire semaphore");
 
-                                let callback = get_success_callback(cmd.clone(), rp.clone(), writer_access.clone(), guard);
-                                // semafor per sektor
+                                let callback = success_callback(cmd.clone(), rp.clone(), writer_access.clone(), guard);
+
                                 worker_tx.send((cmd, Some(callback))).await.expect("Failed to send message to sector");
                             }
                             // Receiver message with invalid sector index
@@ -140,16 +143,16 @@ pub async fn accept_connections(
                                 send_response(resp, writer_access.clone()).await;
                             }
                         },
-                        RegisterCommand::System(SystemRegisterCommand { header, .. })=> {
+                        RegisterCommand::System(SystemRegisterCommand { header, .. })=> {                            
                             let sidx = header.sector_idx;
                             let tx = rp.sectors_txs.get(&sidx).expect("Sector handler not found");
                             tx.send((cmd, None)).await.expect("Failed to send message to sector");
                         },
                     }
                 }
-                // Receiver message with invalid HMAC
+                // Received message with invalid HMAC
                 else {
-                        if let RegisterCommand::Client(..) = cmd {
+                    if let RegisterCommand::Client(..) = cmd {
                         // Invalid HMac, send response with AuthFailure status
                         let (rid, msg_type) = get_rid_and_msg_type(cmd);
 
@@ -158,6 +161,12 @@ pub async fn accept_connections(
 
                         send_response(resp, writer_access.clone()).await;
                     }
+                    // else if let RegisterCommand::System(SystemRegisterCommand { header, .. }) = cmd {
+                    //     if rp.self_ident == 3 {
+                    //         println!("I am process {} and I received a command from {} with invalid HMAC", rp.self_ident, header.process_identifier);
+                    //     }
+                        // println!("I am process {} and I received a command from {} with invalid HMAC", rp.self_ident, header.process_identifier);
+                    // }
                 }
             }
         });
@@ -165,7 +174,7 @@ pub async fn accept_connections(
 }
 
 // What happens when a message is completed successfuly.
-pub fn get_success_callback(
+pub fn success_callback(
     cmd: RegisterCommand,
     register_process: Arc<RegisterProcessState>,
     writer: Arc<Mutex<tokio::net::tcp::OwnedWriteHalf>>,
