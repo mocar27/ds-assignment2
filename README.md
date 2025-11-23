@@ -73,7 +73,7 @@ upon event <sl, Deliver | q, [VALUE, id, ts', wr', v'] > such that id == op_id a
             (ts, wr, val) := (maxts + 1, rank(self), writeval);
             store(ts, wr, val);
             trigger < sbeb, Broadcast | [WRITE_PROC, op_id, maxts + 1, rank(self), writeval] >;
-
+```
 upon event < nnar, Write | v > do
     op_id := generate_unique_id();
     writeval := v;
@@ -81,7 +81,7 @@ upon event < nnar, Write | v > do
     readlist := [ _ ] `of length` N;
     writing := TRUE;
     trigger < sbeb, Broadcast | [READ_PROC, op_id] >;
-
+```
 upon event < sbeb, Deliver | p, [WRITE_PROC, id, ts', wr', v'] > do
     if (ts', wr') > (ts, wr) then
         (ts, wr, val) := (ts', wr', v');
@@ -126,6 +126,7 @@ Every process of the system can be contacted by a client. Clients connect using 
 
 READ and WRITE commands have the following format:
 
+```
 0       7 8     15 16    23 24    31 32    39 40    47 48    55 56    64
 +--------+--------+--------+--------+--------+--------+--------+--------+
 |             Magic number          |       Padding            |   Msg  |
@@ -152,6 +153,7 @@ READ and WRITE commands have the following format:
 |                           HMAC tag                                    |
 |                                                                       |
 +--------+--------+--------+--------+--------+--------+--------+--------+
+```
 READ operation type is 0x01, WRITE operation type is 0x02. Client can use the request number for internal identification of messages.
 
 WRITE has content of 4096 bytes to be written. READ has no content. The HMAC tag is a hmac(sh256) tag of the entire message (from the magic number to the end of the content).
